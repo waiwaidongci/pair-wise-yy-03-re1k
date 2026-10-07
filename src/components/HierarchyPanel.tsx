@@ -69,8 +69,10 @@ export default function HierarchyPanel() {
   const objects = useEditorStore((state) => state.objects)
   const selectedId = useEditorStore((state) => state.selectedId)
   const add = useEditorStore((state) => state.add)
+  const reparent = useEditorStore((state) => state.reparent)
   const roots = objects.filter((object) => !object.parentId)
   const countGeometry = objects.filter((object) => !object.type.includes('Light') && object.type !== 'camera').length
+  const reparentRoot = (id: string) => reparent(id, null)
 
   return (
     <aside className="panel hierarchy-panel">
@@ -87,8 +89,18 @@ export default function HierarchyPanel() {
         <Button size="small" onClick={() => add('pointLight', selectedId)}>点光源</Button>
         <Button size="small" onClick={() => add('camera', selectedId)}>相机</Button>
       </Stack>
-      <Typography variant="caption" color="text.secondary">拖动物体到另一行可调整父子关系</Typography>
-      <List dense disablePadding sx={{ mt: 1 }}>
+      <Typography variant="caption" color="text.secondary">拖动物体到另一行可调整父子关系，拖到空白处回到根节点</Typography>
+      <List
+        dense
+        disablePadding
+        sx={{ mt: 1, minHeight: 120, borderRadius: 1 }}
+        onDragOver={(event) => { if (event.dataTransfer.types.includes('application/x-scene-object')) event.preventDefault() }}
+        onDrop={(event) => {
+          event.preventDefault()
+          const id = event.dataTransfer.getData('application/x-scene-object')
+          if (id) reparentRoot(id)
+        }}
+      >
         {roots.map((object) => <ObjectRow key={object.id} object={object} depth={0} />)}
       </List>
     </aside>

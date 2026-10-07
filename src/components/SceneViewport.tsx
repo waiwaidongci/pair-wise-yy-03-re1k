@@ -5,7 +5,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import * as THREE from 'three'
 import type { SceneObject } from '../types/scene'
 import { useEditorStore } from '../stores/editor'
-import { isGeometry, TYPE_LABELS, worldMatrix } from '../utils/scene'
+import { isGeometry, worldMatrix } from '../utils/scene'
 import Geometry from './Geometry'
 
 interface Registry {
@@ -126,6 +126,7 @@ function SelectionControls({ registry }: { registry: Registry }) {
   const snapEnabled = useEditorStore((state) => state.snapEnabled)
   const snapSize = useEditorStore((state) => state.snapSize)
   const setTransform = useEditorStore((state) => state.setTransform)
+  const beginDrag = useEditorStore((state) => state.beginDrag)
   const [, refresh] = useState(0)
 
   useEffect(() => {
@@ -153,18 +154,33 @@ function SelectionControls({ registry }: { registry: Registry }) {
       translationSnap={snapEnabled ? snapSize : null}
       rotationSnap={snapEnabled ? Math.PI / 12 : null}
       scaleSnap={snapEnabled ? 0.1 : null}
+      onMouseDown={() => beginDrag()}
       onMouseUp={commit}
     />
   )
 }
 
-function InstanceBatch({ type, objects, registry }: { type: SceneObject['type']; objects: SceneObject[]; registry: Registry }) {
+function InstanceBatch({
+  type,
+  objects,
+  allObjects,
+  batchRevision,
+  registry,
+}: {
+  type: SceneObject['type']
+  objects: SceneObject[]
+  allObjects: SceneObject[]
+  batchRevision: number
+  registry: Registry
+}) {
   const select = useEditorStore((state) => state.select)
   const ref = useRef<THREE.InstancedMesh>(null!)
+  // 层级一改 batchRevision 就变，这里的世界矩阵缓存整体作废并重算
   const matrices = useMemo(() => {
     const cache = new Map<string, THREE.Matrix4>()
-    return objects.map((object) => worldMatrix(object.id, useEditorStore.getState().objects, cache))
-  }, [objects])
+    return objects.map((object) => worldMatrix(object.id, allObjects, cache))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [objects, allObjects, batchRevision])
 
   useEffect(() => {
     const mesh = ref.current
@@ -197,18 +213,35 @@ function InstanceBatch({ type, objects, registry }: { type: SceneObject['type'];
   )
 }
 
-function InstancedScene({ objects, registry }: { objects: SceneObject[]; registry: Registry }) {
+function InstancedScene({
+  objects,
+  batchRevision,
+  registry,
+}: {
+  objects: SceneObject[]
+  batchRevision: number
+  registry: Registry
+}) {
   const batches = useMemo(() => {
     const map = new Map<SceneObject['type'], SceneObject[]>()
     objects.filter((object) => isGeometry(object.type) && object.visible).forEach((object) => {
       map.set(object.type, [...(map.get(object.type) ?? []), object])
     })
     return [...map.entries()]
-  }, [objects])
+  }, [objects, batchRevision])
   const singleObjects = objects.filter((object) => !isGeometry(object.type) && !object.parentId)
   return (
     <>
-      {batches.map(([type, batch]) => <InstanceBatch key={type} type={type} objects={batch} registry={registry} />)}
+      {batches.map(([type, batch]) => (
+        <InstanceBatch
+          key={type}
+          type={type}
+          objects={batch}
+          allObjects={objects}
+          batchRevision={batchRevision}
+          registry={registry}
+        />
+      ))}
       {singleObjects.map((object) => <ObjectView key={object.id} object={object} objects={objects} registry={registry} />)}
     </>
   )
@@ -217,6 +250,7 @@ function InstancedScene({ objects, registry }: { objects: SceneObject[]; registr
 function SceneContent({ registry }: { registry: Registry }) {
   const objects = useEditorStore((state) => state.objects)
   const performance = useEditorStore((state) => state.performance)
+  const batchRevision = useEditorStore((state) => state.batchRevision)
   const showGrid = performance.showGrid
   return (
     <>
@@ -225,7 +259,7 @@ function SceneContent({ registry }: { registry: Registry }) {
       <ambientLight intensity={0.7} />
       {showGrid && <Grid infiniteGrid cellSize={0.5} sectionSize={2.5} fadeDistance={32} sectionColor="#7b8da5" cellColor="#b5c0cf" />}
       {performance.instanceMode ? (
-        <InstancedScene objects={objects} registry={registry} />
+        <InstancedScene objects={objects} batchRevision={batchRevision} registry={registry} />
       ) : (
         objects.filter((object) => !object.parentId).map((object) => <ObjectView key={object.id} object={object} objects={objects} registry={registry} />)
       )}
