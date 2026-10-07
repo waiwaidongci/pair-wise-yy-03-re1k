@@ -158,13 +158,15 @@ function SelectionControls({ registry }: { registry: Registry }) {
   )
 }
 
-function InstanceBatch({ type, objects, registry }: { type: SceneObject['type']; objects: SceneObject[]; registry: Registry }) {
+function InstanceBatch({ type, objects, registry, batchVersion }: { type: SceneObject['type']; objects: SceneObject[]; registry: Registry; batchVersion: number }) {
   const select = useEditorStore((state) => state.select)
   const ref = useRef<THREE.InstancedMesh>(null!)
   const matrices = useMemo(() => {
     const cache = new Map<string, THREE.Matrix4>()
     return objects.map((object) => worldMatrix(object.id, useEditorStore.getState().objects, cache))
-  }, [objects])
+    // batchVersion forces a recompute after hierarchy changes even if object identities are reused.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [objects, batchVersion])
 
   useEffect(() => {
     const mesh = ref.current
@@ -197,18 +199,19 @@ function InstanceBatch({ type, objects, registry }: { type: SceneObject['type'];
   )
 }
 
-function InstancedScene({ objects, registry }: { objects: SceneObject[]; registry: Registry }) {
+function InstancedScene({ objects, registry, batchVersion }: { objects: SceneObject[]; registry: Registry; batchVersion: number }) {
   const batches = useMemo(() => {
     const map = new Map<SceneObject['type'], SceneObject[]>()
     objects.filter((object) => isGeometry(object.type) && object.visible).forEach((object) => {
       map.set(object.type, [...(map.get(object.type) ?? []), object])
     })
     return [...map.entries()]
-  }, [objects])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [objects, batchVersion])
   const singleObjects = objects.filter((object) => !isGeometry(object.type) && !object.parentId)
   return (
     <>
-      {batches.map(([type, batch]) => <InstanceBatch key={type} type={type} objects={batch} registry={registry} />)}
+      {batches.map(([type, batch]) => <InstanceBatch key={type} type={type} objects={batch} registry={registry} batchVersion={batchVersion} />)}
       {singleObjects.map((object) => <ObjectView key={object.id} object={object} objects={objects} registry={registry} />)}
     </>
   )
@@ -216,6 +219,7 @@ function InstancedScene({ objects, registry }: { objects: SceneObject[]; registr
 
 function SceneContent({ registry }: { registry: Registry }) {
   const objects = useEditorStore((state) => state.objects)
+  const batchVersion = useEditorStore((state) => state.batchVersion)
   const performance = useEditorStore((state) => state.performance)
   const showGrid = performance.showGrid
   return (
@@ -225,7 +229,7 @@ function SceneContent({ registry }: { registry: Registry }) {
       <ambientLight intensity={0.7} />
       {showGrid && <Grid infiniteGrid cellSize={0.5} sectionSize={2.5} fadeDistance={32} sectionColor="#7b8da5" cellColor="#b5c0cf" />}
       {performance.instanceMode ? (
-        <InstancedScene objects={objects} registry={registry} />
+        <InstancedScene objects={objects} registry={registry} batchVersion={batchVersion} />
       ) : (
         objects.filter((object) => !object.parentId).map((object) => <ObjectView key={object.id} object={object} objects={objects} registry={registry} />)
       )}

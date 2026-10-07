@@ -3,7 +3,15 @@ import {
   Box,
   Button,
   Checkbox,
+  Dialog,
+  DialogActions,
+  DialogContent,
+  DialogContentText,
+  DialogTitle,
   FormControlLabel,
+  IconButton,
+  Menu,
+  MenuItem,
   Slider,
   Snackbar,
   Stack,
@@ -14,14 +22,16 @@ import {
 import {
   CloudDownloadOutlined,
   CloudUploadOutlined,
+  MoreVert,
   OpenWithOutlined,
+  RedoOutlined,
   RotateRightOutlined,
   SaveOutlined,
   ScaleOutlined,
   SpeedOutlined,
   UndoOutlined,
 } from '@mui/icons-material'
-import { useEffect } from 'react'
+import { useEffect, useState } from 'react'
 import HierarchyPanel from '../components/HierarchyPanel'
 import InspectorPanel from '../components/InspectorPanel'
 import SceneViewport from '../components/SceneViewport'
@@ -30,19 +40,33 @@ import type { SceneDocument, TransformMode } from '../types/scene'
 
 export default function EditorView() {
   const store = useEditorStore()
+  const [resetOpen, setResetOpen] = useState(false)
+  const [menuAnchor, setMenuAnchor] = useState<null | HTMLElement>(null)
   const selectedObject = store.objects.find((item) => item.id === store.selectedId)
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       const target = event.target as HTMLElement
       if (target.matches('input, textarea')) return
-      if (event.key.toLowerCase() === 'g') store.setTransformMode('translate')
-      if (event.key.toLowerCase() === 'r') store.setTransformMode('rotate')
-      if (event.key.toLowerCase() === 's') store.setTransformMode('scale')
-      if ((event.key === 'Delete' || event.key === 'Backspace') && store.selectedId) store.remove(store.selectedId)
-      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 's') {
+      const key = event.key.toLowerCase()
+      if ((event.metaKey || event.ctrlKey) && key === 'z') {
         event.preventDefault()
-        exportScene()
+        if (event.shiftKey) store.redo()
+        else store.undo()
+        return
+      }
+      if ((event.metaKey || event.ctrlKey) && key === 'y') {
+        event.preventDefault()
+        store.redo()
+        return
+      }
+      if (key === 'g') store.setTransformMode('translate')
+      if (key === 'r') store.setTransformMode('rotate')
+      if (key === 's') store.setTransformMode('scale')
+      if ((event.key === 'Delete' || event.key === 'Backspace') && store.selectedId) store.remove(store.selectedId)
+      if ((event.metaKey || event.ctrlKey) && key === 's') {
+        event.preventDefault()
+        store.persistNow({ force: true })
       }
     }
     window.addEventListener('keydown', onKeyDown)
@@ -50,7 +74,12 @@ export default function EditorView() {
   })
 
   function exportScene() {
-    const document: SceneDocument = { version: 1, name: store.name, objects: store.objects, savedAt: new Date().toISOString() }
+    const document: SceneDocument = {
+      version: 1,
+      name: store.name,
+      objects: store.objects,
+      savedAt: new Date().toISOString(),
+    }
     const blob = new Blob([JSON.stringify(document, null, 2)], { type: 'application/json' })
     const url = URL.createObjectURL(blob)
     const anchor = window.document.createElement('a')
@@ -58,7 +87,7 @@ export default function EditorView() {
     anchor.download = `${store.name}.scene.json`
     anchor.click()
     URL.revokeObjectURL(url)
-    store.noticeMessage('场景 JSON 已保存')
+    store.noticeMessage('场景 JSON 已导出')
   }
 
   async function importScene(file: File) {
@@ -113,13 +142,25 @@ export default function EditorView() {
             <Slider size="small" min={0.1} max={1} step={0.05} value={store.snapSize} onChange={(_, value) => store.setSnapSize(value as number)} />
           </Box>
           <Box sx={{ flex: 1 }} />
-          <Button size="small" startIcon={<UndoOutlined />} onClick={store.reset}>重置</Button>
+          <Tooltip title="撤销 (Ctrl+Z)">
+            <span>
+              <Button size="small" startIcon={<UndoOutlined />} disabled={store.past.length === 0} onClick={() => store.undo()}>撤销</Button>
+            </span>
+          </Tooltip>
+          <Tooltip title="重做 (Ctrl+Shift+Z)">
+            <span>
+              <Button size="small" startIcon={<RedoOutlined />} disabled={store.future.length === 0} onClick={() => store.redo()}>重做</Button>
+            </span>
+          </Tooltip>
           <Button size="small" component="label" startIcon={<CloudUploadOutlined />}>
             导入
             <input hidden type="file" accept=".json" onChange={(event) => event.target.files?.[0] && importScene(event.target.files[0])} />
           </Button>
           <Button size="small" startIcon={<CloudDownloadOutlined />} onClick={exportScene}>导出</Button>
-          <Button size="small" variant="contained" startIcon={<SaveOutlined />} onClick={exportScene}>保存场景</Button>
+          <Button size="small" variant="contained" startIcon={<SaveOutlined />} onClick={() => store.persistNow({ force: true })}>保存场景</Button>
+          <IconButton size="small" onClick={(event) => setMenuAnchor(event.currentTarget)}>
+            <MoreVert fontSize="small" />
+          </IconButton>
         </Toolbar>
       </AppBar>
       <main className="editor-grid">
@@ -130,9 +171,35 @@ export default function EditorView() {
       <div className="statusbar">
         <span>{selectedObject ? `已选择：${selectedObject.name}` : '未选择对象'}</span>
         <span>对象 {store.objects.length} · 位置 {selectedObject?.position.map((item) => item.toFixed(2)).join(' / ') ?? '--'}</span>
-        <span>{store.performance.instanceMode ? 'InstancedMesh 批量渲染' : '独立对象渲染'}</span>
+        <span>历史 {store.past.length} / {store.future.length} · {store.performance.instanceMode ? 'InstancedMesh 批量渲染' : '独立对象渲染'}</span>
       </div>
       <Snackbar open={Boolean(store.notice)} autoHideDuration={2600} onClose={() => store.noticeMessage('')} message={store.notice} />
+      <Snackbar
+        open={Boolean(store.saveError)}
+        onClose={() => store.dismissSaveError()}
+        message={`保存失败：${store.saveError ?? ''}（已恢复现场）`}
+        action={
+          <>
+            <Button color="secondary" size="small" onClick={() => store.retryPersist()}>重试</Button>
+            <Button size="small" onClick={() => store.dismissSaveError()}>关闭</Button>
+          </>
+        }
+      />
+      <Menu anchorEl={menuAnchor} open={Boolean(menuAnchor)} onClose={() => setMenuAnchor(null)}>
+        <MenuItem onClick={() => { setMenuAnchor(null); setResetOpen(true) }}>重置示例场景</MenuItem>
+      </Menu>
+      <Dialog open={resetOpen} onClose={() => setResetOpen(false)}>
+        <DialogTitle>重置场景？</DialogTitle>
+        <DialogContent>
+          <DialogContentText>
+            将恢复为示例场景。当前编辑不会丢失——重置可撤销，也会随历史保存在本机。
+          </DialogContentText>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setResetOpen(false)}>取消</Button>
+          <Button color="error" variant="contained" onClick={() => { setResetOpen(false); store.reset() }}>重置</Button>
+        </DialogActions>
+      </Dialog>
     </Box>
   )
 }
